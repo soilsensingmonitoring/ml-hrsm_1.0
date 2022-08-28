@@ -1,2 +1,2 @@
-# ml-hrsm (1.0)
+# ml-hrsm_1.0
 Machine-Learning based High-Resolution Soil Moisture mapping and spatial analysis tool - Version 1.0
