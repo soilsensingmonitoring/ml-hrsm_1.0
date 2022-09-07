@@ -850,64 +850,68 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
 
           if(sum(!is.na(map_covariate_grid$elevation))<1)
           {
-            map_covariate_grid$elevation  <- mean(all$elevation)
-            map_covariate_grid$slope  <- mean(all$slope)
-            map_covariate_grid$aspect  <- mean(all$aspect)
-            map_covariate_grid$hillshade  <- mean(all$hillshade)
+            map_covariate_grid$elevation  <- mean(all$elevation, na.rm = T)
+            map_covariate_grid$slope  <- mean(all$slope, na.rm = T)
+            map_covariate_grid$aspect  <- mean(all$aspect, na.rm = T)
+            map_covariate_grid$hillshade  <- mean(all$hillshade, na.rm = T)
           }
 
           if(sum(!is.na(map_covariate_grid$clay_5))<1)
           {
-            map_covariate_grid$clay_5  <- mean(all$clay_5)
-            map_covariate_grid$sand_5  <- mean(all$sand_5)
-            map_covariate_grid$bd_5  <- mean(all$bd_5)
+            map_covariate_grid$clay_5  <- mean(all$clay_5, na.rm = T)
+            map_covariate_grid$sand_5  <- mean(all$sand_5, na.rm = T)
+            map_covariate_grid$bd_5  <- mean(all$bd_5, na.rm = T)
           }
 
           if(sum(!is.na(map_covariate_grid$clay_100))<1)
           {
-            map_covariate_grid$clay_100  <- mean(all$clay_100)
-            map_covariate_grid$sand_100  <- mean(all$sand_100)
-            map_covariate_grid$bd_100  <- mean(all$bd_100)
+            map_covariate_grid$clay_100  <- mean(all$clay_100, na.rm = T)
+            map_covariate_grid$sand_100  <- mean(all$sand_100, na.rm = T)
+            map_covariate_grid$bd_100  <- mean(all$bd_100, na.rm = T)
           }
 
           if(sum(!is.na(map_covariate_grid$ssm))<1)
           {
-            map_covariate_grid$ssm  <- mean(all$ssm)
+            map_covariate_grid$ssm  <- mean(all$ssm, na.rm = T)
           }
 
           if(sum(!is.na(map_covariate_grid$susm))<1)
           {
-            map_covariate_grid$susm  <- mean(all$susm)
+            map_covariate_grid$susm  <- mean(all$susm, na.rm = T)
           }
 
           if(sum(!is.na(map_covariate_grid$vv))<1)
           {
-            map_covariate_grid$vv  <- mean(all$vv)
-            map_covariate_grid$angle  <- mean(all$angle)
+            map_covariate_grid$vv  <- mean(all$vv, na.rm = T)
+            map_covariate_grid$angle  <- mean(all$angle, na.rm = T)
           }
 
           if(sum(!is.na(map_covariate_grid$vh))<1)
           {
-            map_covariate_grid$vh  <- mean(all$vh)
-            map_covariate_grid$angle  <- mean(all$angle)
+            map_covariate_grid$vh  <- mean(all$vh, na.rm = T)
+            map_covariate_grid$angle  <- mean(all$angle, na.rm = T)
           }
 
           if(sum(!is.na(map_covariate_grid$LST))<1)
           {
-            map_covariate_grid$LST  <- mean(all$LST)
+            map_covariate_grid$LST  <- mean(all$LST, na.rm = T)
           }
 
           if(sum(!is.na(map_covariate_grid$LS_B5))<1)
           {
-            map_covariate_grid$LS_B5  <- mean(all$LS_B5)
-            map_covariate_grid$LS_B6  <- mean(all$LS_B6)
-            map_covariate_grid$LS_B7  <- mean(all$LS_B7)
-            map_covariate_grid$LS_B10  <- mean(all$LS_B10)
-            map_covariate_grid$LS_NDVI  <- mean(all$LS_NDVI)
-            map_covariate_grid$LS_NDWI  <- mean(all$LS_NDWI)
+            map_covariate_grid$LS_B5  <- mean(all$LS_B5, na.rm = T)
+            map_covariate_grid$LS_B6  <- mean(all$LS_B6, na.rm = T)
+            map_covariate_grid$LS_B7  <- mean(all$LS_B7, na.rm = T)
+            map_covariate_grid$LS_B10  <- mean(all$LS_B10, na.rm = T)
+            map_covariate_grid$LS_NDVI  <- mean(all$LS_NDVI, na.rm = T)
+            map_covariate_grid$LS_NDWI  <- mean(all$LS_NDWI, na.rm = T)
           }
 
-
+          if(sum(!is.na(map_covariate_grid$LS_B10))<1)
+          {
+            map_covariate_grid$LS_B10  <- mean(all$LS_B10, na.rm = T)
+          }
+          
 
           ## Apply ML models to the grid
           ## Reduced model
