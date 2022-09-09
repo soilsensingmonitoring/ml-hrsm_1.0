@@ -401,12 +401,49 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
         pb <- txtProgressBar(min=0, max=3, style=3)
         ee_as_raster(image = ssm, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "ssm_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
         bunk(id, m, total, 2,"Downloading map...",pb,1)
+        
+        ## Remove duplicates
+        if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "ssm_NASA_raw", full.names = T)) > 1 )
+        {
+          temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "ssm_NASA_raw", full.names = T)
+          temp <- lapply(temp_name, stack)
+          if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+          { ssm_raster <- temp[[2]]}
+          if (length(names(temp[[1]])) < length(names(temp[[2]])))
+          { ssm_raster <- temp[[1]]}
+          writeRaster(ssm_raster, paste0(WD, "/covariates_temp/ssm_NASA_raw.tif"), overwrite=T)
+          unlink(temp_name)
+          # Deleting unwanted files
+          xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+          unlink(xml_names, recursive=TRUE)
+        }
+
         ssm_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "ssm_NASA_raw", full.names = T))
+    
+        
         ee_as_raster(image = susm, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "susm_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
         bunk(id, m, total, 2,"Downloading map...",pb,2)
+        
+        ## Remove duplicates
+        if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "susm_NASA_raw", full.names = T)) > 1 )
+        {
+          temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "susm_NASA_raw", full.names = T)
+          temp <- lapply(temp_name, stack)
+          if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+          { susm_raster <- temp[[2]]}
+          if (length(names(temp[[1]])) < length(names(temp[[2]])))
+          { susm_raster <- temp[[1]]}
+          writeRaster(susm_raster, paste0(WD, "/covariates_temp/susm_NASA_raw.tif"), overwrite=T)
+          unlink(temp_name)
+          # Deleting unwanted files
+          xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+          unlink(xml_names, recursive=TRUE)
+        }
+
         susm_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "susm_NASA_raw", full.names = T))
 
-        SMAP_dates <- substr(names(ssm_raster), 18, 25)
+        SMAP_dates <- unlist(strsplit(ee_print(ssm, quiet=T)$img_bands_names, " "))
+        SMAP_dates <- substr(SMAP_dates, 18, 25)
         SMAP_unique_dates <- sort(unique(SMAP_dates))
         SMAP_index <- NULL
         SMAP_list <- 1:length(SMAP_dates)
@@ -418,6 +455,23 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
 
         ## MODIS
         ee_as_raster(image = LST, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LST_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+       
+        ## Remove duplicates
+        if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "LST_NASA_raw", full.names = T)) > 1 )
+        {
+          temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "LST_NASA_raw", full.names = T)
+          temp <- lapply(temp_name, stack)
+          if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+          { LST_raster <- temp[[2]]}
+          if (length(names(temp[[1]])) < length(names(temp[[2]])))
+          { LST_raster <- temp[[1]]}
+          writeRaster(LST_raster, paste0(WD, "/covariates_temp/LST_NASA_raw.tif"), overwrite=T)
+          unlink(temp_name)
+          # Deleting unwanted files
+          xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+          unlink(xml_names, recursive=TRUE)
+        }
+
         LST_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LST_NASA_raw", full.names = T))
         bunk(id, m, total, 2,"Downloading map...",pb,3)
         close(pb)
@@ -443,7 +497,8 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
 
         values(LST_raster)[values(LST_raster) == 0] = NA
         LST_dates <- unlist(strsplit(ee_print(LST, quiet=T)$img_bands_names, " "))
-        LST_dates <- gsub("(.*)(\\d{4}_\\d{2}_\\d{2})(.*)", "\\2", LST_dates)
+        LST_dates <- paste0(substr(LST_dates, 1, 4), substr(LST_dates, 6, 7), substr(LST_dates, 9, 10))
+        # LST_dates <- gsub("(.*)(\\d{4}_\\d{2}_\\d{2})(.*)", "\\2", LST_dates)
         # LST_dates <- paste0(substr(names(LST_raster), 2, 5), substr(names(LST_raster), 7, 8), substr(names(LST_raster), 10, 11))
 
         ## Sentinel-1
@@ -456,15 +511,69 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
         {
           ee_as_raster(image = vv, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "vv_S1_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
           bunk(id, m, total, 4,"Downloading map...",pb,1)
+          
+          ## Remove duplicates
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "vv_S1_raw", full.names = T)) > 1 )
+          {
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "vv_S1_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { vv_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { vv_raster <- temp[[1]]}
+            writeRaster(vv_raster, paste0(WD, "/covariates_temp/vv_S1_raw.tif"), overwrite=T)
+            unlink(temp_name)
+            # Deleting unwanted files
+            xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+            unlink(xml_names, recursive=TRUE)
+          }
+
           vv_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "vv_S1_raw", full.names = T))
+          
           ee_as_raster(image = vh, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "vh_S1_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
           bunk(id, m, total, 4,"Downloading map...",pb,2)
+          
+          ## Remove duplicates
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "vh_S1_raw", full.names = T)) > 1 )
+          {
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "vh_S1_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { vh_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { vh_raster <- temp[[1]]}
+            writeRaster(vh_raster, paste0(WD, "/covariates_temp/vh_S1_raw.tif"), overwrite=T)
+            unlink(temp_name)
+            # Deleting unwanted files
+            xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+            unlink(xml_names, recursive=TRUE)
+          }
+          
           vh_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "vh_S1_raw", full.names = T))
+          
           ee_as_raster(image = angle, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "angle_S1_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
           bunk(id, m, total, 4,"Downloading map...",pb,3)
+          
+          ## Remove duplicates
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "angle_S1_raw", full.names = T)) > 1 )
+          {
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "angle_S1_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { angle_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { angle_raster <- temp[[1]]}
+            writeRaster(angle_raster, paste0(WD, "/covariates_temp/angle_S1_raw.tif"), overwrite=T)
+            unlink(temp_name)
+            # Deleting unwanted files
+            xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+            unlink(xml_names, recursive=TRUE)
+          }
+          
           angle_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "angle_S1_raw", full.names = T))
 
-          S1_dates <- paste0(substr(names(vv_raster), 2, 5), substr(names(vv_raster), 7, 8), substr(names(vv_raster), 10, 11))
+          S1_dates <- unlist(strsplit(ee_print(vv, quiet=T)$img_bands_names, " "))
+          S1_dates <- paste0(substr(S1_dates, 1, 4), substr(S1_dates, 6, 7), substr(S1_dates, 9, 10))
         }
 
         ## Landsat-8
@@ -482,7 +591,70 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
 
         ## Remove Landsat-8 images that have repeated dates and a large cloud cover
         {
-
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B4_NASA_raw", full.names = T)) > 1 )
+          {
+          temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B4_NASA_raw", full.names = T)
+          temp <- lapply(temp_name, stack)
+          if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+          { LS_B4_raster <- temp[[2]]}
+          if (length(names(temp[[1]])) < length(names(temp[[2]])))
+          { LS_B4_raster <- temp[[1]]}
+          writeRaster(LS_B4_raster, paste0(WD, "/covariates_temp/LS_B4_raster.tif"), overwrite=T)
+          unlink(temp_name)
+          }
+          
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B5_NASA_raw", full.names = T)) > 1 )
+          {
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B5_NASA_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { LS_B5_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { LS_B5_raster <- temp[[1]]}
+            writeRaster(LS_B5_raster, paste0(WD, "/covariates_temp/LS_B5_raster.tif"), overwrite=T)
+            unlink(temp_name)
+          }
+          
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B6_NASA_raw", full.names = T)) > 1 )
+          {
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B6_NASA_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { LS_B6_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { LS_B6_raster <- temp[[1]]}
+            writeRaster(LS_B6_raster, paste0(WD, "/covariates_temp/LS_B6_raster.tif"), overwrite=T)
+            unlink(temp_name)
+          }
+          
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B7_NASA_raw", full.names = T)) > 1 )
+          {
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B7_NASA_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { LS_B7_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { LS_B7_raster <- temp[[1]]}
+            writeRaster(LS_B7_raster, paste0(WD, "/covariates_temp/LS_B7_raster.tif"), overwrite=T)
+            unlink(temp_name)
+          }
+          
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B10_NASA_raw", full.names = T)) > 1 )
+          {
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B10_NASA_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { LS_B10_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { LS_B10_raster <- temp[[1]]}
+            writeRaster(LS_B10_raster, paste0(WD, "/covariates_temp/LS_B10_raster.tif"), overwrite=T)
+            unlink(temp_name)
+          }
+          
+          # Deleting unwanted files
+          xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+          unlink(xml_names, recursive=TRUE)
+          
           ## Load the images
           LS_B4_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B4_NASA_raw", full.names = T))
           LS_B5_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B5_NASA_raw", full.names = T))
@@ -490,7 +662,8 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
           LS_B7_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B7_NASA_raw", full.names = T))
           LS_B10_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B10_NASA_raw", full.names = T))
 
-          LS_dates <- paste0(substr(names(LS_B4_raster), 2, 5), substr(names(LS_B4_raster), 7, 8), substr(names(LS_B4_raster), 10, 11))
+          LS_dates <- unlist(strsplit(ee_print(LS_B4, quiet=T)$img_bands_names, " "))
+          LS_dates <- paste0(substr(LS_dates, 1, 4), substr(LS_dates, 6, 7), substr(LS_dates, 9, 10))
 
 
           names(LS_B4_raster) <- names(LS_B5_raster) <- names(LS_B6_raster) <- names(LS_B7_raster) <- names(LS_B10_raster) <- LS_dates
@@ -536,7 +709,7 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
                             outdir = paste0(WD, "/covariates_temp"), prefix = "LST_doy", progress=F, writechange=F, returnstack=F, overwrite=TRUE)
         bunk(id, m, total, 6,"Temporal gap-filling...",pb,3)
 
-        # For mac: deleting unwanted files
+        # Deleting unwanted files
         xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
         unlink(xml_names, recursive=TRUE)
 
