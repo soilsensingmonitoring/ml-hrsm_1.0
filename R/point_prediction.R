@@ -141,8 +141,29 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
         bunk(id, m, total, 0,"Downloading static covariates...",pb,2)
 
         ## Input and plot static covariates
+        
+        ## Remove duplicates
+        if (length(list.files(WD, pattern = "terrain", full.names = T)) > 1 )
+        {
+          temp_name <- list.files(WD, pattern = "terrain", full.names = T)
+          temp <- lapply(temp_name, stack)
+          terrain_raster <- temp[[1]]
+          writeRaster(terrain_raster, paste0(WD, "/terrain.tif"), overwrite=T)
+          unlink(temp_name)
+        }
+        
+        if (length(list.files(WD, pattern = "LC", full.names = T)) > 1 )
+        {
+          temp_name <- list.files(WD, pattern = "LC", full.names = T)
+          temp <- lapply(temp_name, stack)
+          terrain_raster <- temp[[1]]
+          writeRaster(terrain_raster, paste0(WD, "/LC.tif"), overwrite=T)
+          unlink(temp_name)
+        }
+        
+        
         terrain_raster <- stack(paste0(WD,"/terrain.tif"))
-        names_terrain <- names(terrain_raster)
+        names_terrain <- c("elevation", "slope", "aspect", "hillshade")
         LC_raster <- raster(paste0(WD, "/LC.tif"))
 
 
@@ -176,6 +197,26 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
         close(pb)
 
         ## Input and plot static covariates
+        
+        if (length(list.files(WD, pattern = "soil_5", full.names = T)) > 1 )
+        {
+          temp_name <- list.files(WD, pattern = "soil_5", full.names = T)
+          temp <- lapply(temp_name, stack)
+          terrain_raster <- temp[[1]]
+          writeRaster(terrain_raster, paste0(WD, "/soil_5.tif"), overwrite=T)
+          unlink(temp_name)
+        }
+        
+        if (length(list.files(WD, pattern = "soil_100", full.names = T)) > 1 )
+        {
+          temp_name <- list.files(WD, pattern = "soil_100", full.names = T)
+          temp <- lapply(temp_name, stack)
+          terrain_raster <- temp[[1]]
+          writeRaster(terrain_raster, paste0(WD, "/soil_100.tif"), overwrite=T)
+          unlink(temp_name)
+        }
+        
+        
         soil_5_raster <- stack(paste0(WD, "/soil_5.tif"))
         soil_100_raster <- stack(paste0(WD, "/soil_100.tif"))
 
@@ -184,6 +225,10 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
 
 
         constant_raster <- stack(terrain_raster, soil_5_raster, soil_100_raster)
+        
+        # Deleting unwanted files
+        xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+        unlink(xml_names, recursive=TRUE)
       }
 
 
