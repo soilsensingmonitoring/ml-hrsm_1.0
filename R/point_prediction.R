@@ -121,8 +121,120 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
         # doy_frame <- c(as.Date("2019-06-01"), as.Date("2019-06-30"))
 
       }
+      
+      
+      ## Temporal gap-filling function from https://gist.github.com/johnbaums/10465462
+      {
+        interpolateTemporal <- function(s, xin, xout, outdir, prefix, progress,
+                                        writechange, returnstack, ...) {
+          
+          if(missing(outdir)) stop('Please specify outdir')
+          if(missing(prefix)) stop('Please specify prefix')
+          if(nlayers(s) != length(xin)) stop('Length of xin must equal the number of layers in s.')
+          if(nlayers(s) < 2) stop('stack s must have at least 2 layers.')
+          if(!all(findInterval(xout, range(xin), rightmost.closed=TRUE) == 1)) {
+            if(any(xout < min(xin))) {
+              stop('This function does not extrapolate backwards (i.e. below the earliest element in xin). All elements of xout must be greater that min(xin).')
+            } else {
+              warning('Some values of xout require extrapolation beyond the range of xin.\nThe rate of change for extrapolation is assumed to be equal to that for the period between the last and second-to-last elements of xin (after temporal ordering).')
+            }
+          }
+          outdir <- normalizePath(sub('/$|\\\\$', '', outdir), winslash='/',
+                                  mustWork=FALSE)
+          if(!file.exists(outdir)) dir.create(outdir, recursive=TRUE)
+          xout <- unique(xout)
+          if(is.unsorted(xin)) {
+            s <- s[[order(xin)]]
+            xin <- sort(xin)
+          }
+          len <- diff(xin)
+          base <- findInterval(xout, xin)
+          lower <- unique(base[base < nlayers(s)])
+          s.change <- stack(sapply(if(length(lower) > 0) lower else nlayers(s) - 1,
+                                   function(x) {
+                                     message(sprintf('Calculating change grid for %s to %s.', xin[x], xin[x+1]))
+                                     overlay(s[[x]], s[[x+1]], fun=function(x1, x2) (x2-x1)/len[x],
+                                             filename=ifelse(writechange,
+                                                             file.path(outdir, sprintf('changegrid_%s_%s', xin[x], xin[x+1])),
+                                                             ''), recycle=FALSE, format='GTiff', ...)
+                                   }))
+          
+          multi <- xout - xin[base]
+          chg.ind <- ifelse(base > nlayers(s.change), nlayers(s.change), base)
+          message('Calculating grids for years specified in xout...')
+          if(progress) pb <- txtProgressBar(0, length(xout), style=3)
+          invisible(sapply(seq_along(xout), function(x) {
+            out.rast <- if(xout[x] %in% xin) {
+              s[[base[x]]]
+            } else {
+              overlay(s[[base[x]]], s.change[[chg.ind[x]]],
+                      fun=function(x1, x2) x1 + (x2*multi[x]))
+            }
+            writeRaster(out.rast,
+                        filename=file.path(outdir, sprintf('%s_%s', prefix, xout[x])),
+                        format='GTiff', ...)
+            if(progress) setTxtProgressBar(pb, x)
+          }))
+          if(isTRUE(returnstack)) {
+            f <- file.path(outdir, paste0(prefix, '_', xout, '.tif'))
+            return(stack(f[order(as.numeric(sub('.*_(\\d+)\\.tif$', '\\1', f)))]))
+          }
+        }
+      }
+      
+      ## Masking functions
+      {
+        ## Function for clip image collections from GEE
+        clip_fun = function(img){
+          img <- img$reproject(crs = "EPSG:4326", scale = resolution)$clip(roi)
+          return(img)
+        }
+        
+        ## Function for pre-processing sentinel-1 data
+        preprocess_vv = function(img){
+          vv_masked <- img$mask(img$gt(-20)$And(img$lt(-5)))
+          img <- vv_masked$convolve(ee$Kernel$gaussian(3))
+          return(img)
+        }
+        
+        preprocess_vh = function(img){
+          vh_masked <- img$mask(img$gt(-30)$And(img$lt(-10)))
+          img <- vh_masked$convolve(ee$Kernel$gaussian(3))
+          return(img)
+        }
+        
+        ## Cloud masking function for Landsat-8_L2
+        maskL8sr <- function(image) {
+          cloudShadowBitMask <- bitwShiftL(1, 4)
+          cloudsBitMask <- bitwShiftL(1, 3)
+          snowBitMask <- bitwShiftL(1, 5)
+          qa <- image$select('QA_PIXEL')
+          mask <- qa$bitwiseAnd(cloudShadowBitMask)$eq(0)$And(qa$bitwiseAnd(cloudsBitMask)$eq(0))$And(qa$bitwiseAnd(snowBitMask)$eq(0))
+          
+          image$updateMask(mask)$copyProperties(image, list("system:time_start"))
+        }
+        
+        applyScaleFactors <- function(image) {
+          opticalBands <- image$select('SR_B.')$multiply(0.0000275)$add(-0.2)
+          thermalBands <- image$select('ST_B.*')$multiply(0.00341802)$add(149.0)
+          
+          image$addBands(opticalBands, NULL, TRUE)$addBands(thermalBands, NULL, TRUE)
+        }
+        
+        ## Cloud masking function for MODIS
+        maskMODIS <- function(image) {
+          MandatoryBitMask <- bitwShiftL(1, 1)
+          DataBitMask <- bitwShiftL(1, 3)
+          qa <- image$select('QC_Day')
+          mask <- qa$bitwiseAnd(MandatoryBitMask)$eq(0)$And(qa$bitwiseAnd(DataBitMask)$eq(0))
+          
+          image$updateMask(mask)$copyProperties(image, list("system:time_start"))
+        }
+        
+        
+      }
 
-      ## Download remote sensing data and land surface parameters from GEE and Cloud Storage
+      ## Download land surface parameters from GEE and Cloud Storage
       {
         ## DEM data and terrain parameters
         dem <- ee$Image("USGS/SRTMGL1_003")
@@ -231,195 +343,82 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
         unlink(xml_names, recursive=TRUE)
       }
 
-
-      ## Temporal gap-filling function from https://gist.github.com/johnbaums/10465462
+      ## Prepare dynamic covariates 
       {
-        interpolateTemporal <- function(s, xin, xout, outdir, prefix, progress,
-                                        writechange, returnstack, ...) {
-
-          if(missing(outdir)) stop('Please specify outdir')
-          if(missing(prefix)) stop('Please specify prefix')
-          if(nlayers(s) != length(xin)) stop('Length of xin must equal the number of layers in s.')
-          if(nlayers(s) < 2) stop('stack s must have at least 2 layers.')
-          if(!all(findInterval(xout, range(xin), rightmost.closed=TRUE) == 1)) {
-            if(any(xout < min(xin))) {
-              stop('This function does not extrapolate backwards (i.e. below the earliest element in xin). All elements of xout must be greater that min(xin).')
-            } else {
-              warning('Some values of xout require extrapolation beyond the range of xin.\nThe rate of change for extrapolation is assumed to be equal to that for the period between the last and second-to-last elements of xin (after temporal ordering).')
-            }
-          }
-          outdir <- normalizePath(sub('/$|\\\\$', '', outdir), winslash='/',
-                                  mustWork=FALSE)
-          if(!file.exists(outdir)) dir.create(outdir, recursive=TRUE)
-          xout <- unique(xout)
-          if(is.unsorted(xin)) {
-            s <- s[[order(xin)]]
-            xin <- sort(xin)
-          }
-          len <- diff(xin)
-          base <- findInterval(xout, xin)
-          lower <- unique(base[base < nlayers(s)])
-          s.change <- stack(sapply(if(length(lower) > 0) lower else nlayers(s) - 1,
-                                   function(x) {
-                                     message(sprintf('Calculating change grid for %s to %s.', xin[x], xin[x+1]))
-                                     overlay(s[[x]], s[[x+1]], fun=function(x1, x2) (x2-x1)/len[x],
-                                             filename=ifelse(writechange,
-                                                             file.path(outdir, sprintf('changegrid_%s_%s', xin[x], xin[x+1])),
-                                                             ''), recycle=FALSE, format='GTiff', ...)
-                                   }))
-
-          multi <- xout - xin[base]
-          chg.ind <- ifelse(base > nlayers(s.change), nlayers(s.change), base)
-          message('Calculating grids for years specified in xout...')
-          if(progress) pb <- txtProgressBar(0, length(xout), style=3)
-          invisible(sapply(seq_along(xout), function(x) {
-            out.rast <- if(xout[x] %in% xin) {
-              s[[base[x]]]
-            } else {
-              overlay(s[[base[x]]], s.change[[chg.ind[x]]],
-                      fun=function(x1, x2) x1 + (x2*multi[x]))
-            }
-            writeRaster(out.rast,
-                        filename=file.path(outdir, sprintf('%s_%s', prefix, xout[x])),
-                        format='GTiff', ...)
-            if(progress) setTxtProgressBar(pb, x)
-          }))
-          if(isTRUE(returnstack)) {
-            f <- file.path(outdir, paste0(prefix, '_', xout, '.tif'))
-            return(stack(f[order(as.numeric(sub('.*_(\\d+)\\.tif$', '\\1', f)))]))
-          }
-        }
-      }
-
-      ## Masking functions
-      {
-        ## Function for clip image collections from GEE
-        clip_fun = function(img){
-          img <- img$reproject(crs = "EPSG:4326", scale = resolution)$clip(roi)
-          return(img)
-        }
-
-        ## Function for pre-processing sentinel-1 data
-        preprocess_vv = function(img){
-          vv_masked <- img$mask(img$gt(-20)$And(img$lt(-5)))
-          img <- vv_masked$convolve(ee$Kernel$gaussian(3))
-          return(img)
-        }
-
-        preprocess_vh = function(img){
-          vh_masked <- img$mask(img$gt(-30)$And(img$lt(-10)))
-          img <- vh_masked$convolve(ee$Kernel$gaussian(3))
-          return(img)
-        }
-
-        ## Cloud masking function for Landsat-8_L2
-        maskL8sr <- function(image) {
-          cloudShadowBitMask <- bitwShiftL(1, 4)
-          cloudsBitMask <- bitwShiftL(1, 3)
-          snowBitMask <- bitwShiftL(1, 5)
-          qa <- image$select('QA_PIXEL')
-          mask <- qa$bitwiseAnd(cloudShadowBitMask)$eq(0)$And(qa$bitwiseAnd(cloudsBitMask)$eq(0))$And(qa$bitwiseAnd(snowBitMask)$eq(0))
-
-          image$updateMask(mask)$copyProperties(image, list("system:time_start"))
-        }
-
-        applyScaleFactors <- function(image) {
-          opticalBands <- image$select('SR_B.')$multiply(0.0000275)$add(-0.2)
-          thermalBands <- image$select('ST_B.*')$multiply(0.00341802)$add(149.0)
-
-          image$addBands(opticalBands, NULL, TRUE)$addBands(thermalBands, NULL, TRUE)
-        }
-
-        ## Cloud masking function for MODIS
-        maskMODIS <- function(image) {
-          MandatoryBitMask <- bitwShiftL(1, 1)
-          DataBitMask <- bitwShiftL(1, 3)
-          qa <- image$select('QC_Day')
-          mask <- qa$bitwiseAnd(MandatoryBitMask)$eq(0)$And(qa$bitwiseAnd(DataBitMask)$eq(0))
-
-          image$updateMask(mask)$copyProperties(image, list("system:time_start"))
-        }
-
-
-      }
-
-      ## Download dynamic covariates
-      {
-
-
+        
         dir.create(paste0(WD, "/covariates_temp"))
-
+        
         ## NASA_USDA Enhanced SMAP data - image collection from GEE
         ssm = ee$ImageCollection("NASA_USDA/HSL/SMAP10KM_soil_moisture")$select('ssm')$filterBounds(roi)$filterDate(as.character(doy_frame[1] - 6), as.character(doy_frame[2] + 6))
         susm = ee$ImageCollection("NASA_USDA/HSL/SMAP10KM_soil_moisture")$select('susm')$filterBounds(roi)$filterDate(as.character(doy_frame[1] - 6), as.character(doy_frame[2] + 6))
         ssm = ssm$map(clip_fun)$toBands()
         susm = susm$map(clip_fun)$toBands()
-
+        
         ## MODIS Land surface temperature data - image collection from GEE
         LST = ee$ImageCollection("MODIS/006/MOD11A1")$filterBounds(roi)$filterDate(as.character(doy_frame[1] - 24), as.character(doy_frame[2] + 24))$map(maskMODIS)$select('LST_Day_1km')
         LST = LST$map(clip_fun)$toBands()
-
+        
         ## Mosaic S1 and LS-8 as they are not global datasets
         dates_dynamics <- seq(doy_frame[1], doy_frame[2], 1 )
-
+        
         ## Sentinel-1 data - image collection from GEE
         dates_length_vv <- ceiling(length(dates_dynamics)/6) + 48/6
         dates_dynamics_select <- dates_dynamics[1] - 24
-
+        
         vv = ee$ImageCollection('COPERNICUS/S1_GRD')$filter(ee$Filter$eq('instrumentMode', 'IW'))$filter(ee$Filter$listContains('transmitterReceiverPolarisation', 'VV'))$select('VV')$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 6))$sort('SLC_Processing_start')$filterBounds(roi)$map(clip_fun)$map(preprocess_vv)$mean()$rename(as.character(dates_dynamics_select))
         vh = ee$ImageCollection('COPERNICUS/S1_GRD')$filter(ee$Filter$eq('instrumentMode', 'IW'))$filter(ee$Filter$listContains('transmitterReceiverPolarisation', 'VH'))$select('VH')$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 6))$sort('SLC_Processing_start')$filterBounds(roi)$map(clip_fun)$map(preprocess_vh)$mean()$rename(as.character(dates_dynamics_select))
         angle = ee$ImageCollection('COPERNICUS/S1_GRD')$filter(ee$Filter$eq('instrumentMode', 'IW'))$filter(ee$Filter$listContains('transmitterReceiverPolarisation', 'VV'))$select('angle')$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 6))$sort('SLC_Processing_start')$filterBounds(roi)$map(clip_fun)$mean()$rename(as.character(dates_dynamics_select))
-
+        
         for (l in 2:dates_length_vv)
         {
-
+          
           dates_dynamics_select <- dates_dynamics[1] - 24 +(l-1)*6
           ## Sentinel-1 data - image collection from GEE
           vv_temp = ee$ImageCollection('COPERNICUS/S1_GRD')$filter(ee$Filter$eq('instrumentMode', 'IW'))$filter(ee$Filter$listContains('transmitterReceiverPolarisation', 'VV'))$select('VV')$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 6))$sort('SLC_Processing_start')$filterBounds(roi)$map(clip_fun)$map(preprocess_vv)$mean()
           vh_temp = ee$ImageCollection('COPERNICUS/S1_GRD')$filter(ee$Filter$eq('instrumentMode', 'IW'))$filter(ee$Filter$listContains('transmitterReceiverPolarisation', 'VH'))$select('VH')$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 6))$sort('SLC_Processing_start')$filterBounds(roi)$map(clip_fun)$map(preprocess_vh)$mean()
           angle_temp = ee$ImageCollection('COPERNICUS/S1_GRD')$filter(ee$Filter$eq('instrumentMode', 'IW'))$filter(ee$Filter$listContains('transmitterReceiverPolarisation', 'VV'))$select('angle')$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 6))$sort('SLC_Processing_start')$filterBounds(roi)$map(clip_fun)$mean()
-
+          
           vv <- vv$addBands(vv_temp$rename(as.character(dates_dynamics_select)))
           vh <- vh$addBands(vh_temp$rename(as.character(dates_dynamics_select)))
           angle <- angle$addBands(angle_temp$rename(as.character(dates_dynamics_select)))
-
+          
         }
-
+        
         ## Landsat-8 bands - image collection from GEE
-
+        
         dates_length_LS <- ceiling(length(dates_dynamics)/16) + 192*2/16
         dates_dynamics_select <- dates_dynamics[1] - 192
-
+        
         LS_B4 = ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(roi)$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 16))$map(maskL8sr)$map(applyScaleFactors)$select('SR_B4')$map(clip_fun)$mean()$rename(as.character(dates_dynamics_select))
         LS_B5 = ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(roi)$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 16))$map(maskL8sr)$map(applyScaleFactors)$select('SR_B5')$map(clip_fun)$mean()$rename(as.character(dates_dynamics_select))
         LS_B6 = ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(roi)$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 16))$map(maskL8sr)$map(applyScaleFactors)$select('SR_B6')$map(clip_fun)$mean()$rename(as.character(dates_dynamics_select))
         LS_B7 = ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(roi)$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 16))$map(maskL8sr)$map(applyScaleFactors)$select('SR_B7')$map(clip_fun)$mean()$rename(as.character(dates_dynamics_select))
         LS_B10 = ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(roi)$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 16))$map(maskL8sr)$map(applyScaleFactors)$select('ST_B10')$map(clip_fun)$mean()$rename(as.character(dates_dynamics_select))
-
+        
         cat("\014")
         writeLines(c(msg, "Tasks done: 1/10","Setting bands..."))
         pb <- txtProgressBar(min=1, max=dates_length_LS, style=3)
         for (l in 2:dates_length_LS)
         {
           dates_dynamics_select <- dates_dynamics[1] - 192 +(l-1)*16
-
+          
           ## Landsat-8 bands - image collection from GEE
           LS_B4_temp = ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(roi)$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 16))$map(maskL8sr)$map(applyScaleFactors)$select('SR_B4')$map(clip_fun)$mean()
           LS_B5_temp = ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(roi)$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 16))$map(maskL8sr)$map(applyScaleFactors)$select('SR_B5')$map(clip_fun)$mean()
           LS_B6_temp = ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(roi)$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 16))$map(maskL8sr)$map(applyScaleFactors)$select('SR_B6')$map(clip_fun)$mean()
           LS_B7_temp = ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(roi)$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 16))$map(maskL8sr)$map(applyScaleFactors)$select('SR_B7')$map(clip_fun)$mean()
           LS_B10_temp = ee$ImageCollection("LANDSAT/LC08/C02/T1_L2")$filterBounds(roi)$filterDate(as.character(dates_dynamics_select), as.character(dates_dynamics_select + 16))$map(maskL8sr)$map(applyScaleFactors)$select('ST_B10')$map(clip_fun)$mean()
-
-
+          
+          
           skip_to_next <- FALSE
-
+          
           tryCatch(ee_print(LS_B4_temp), error = function(e) { skip_to_next <<- TRUE})
-
+          
           if(skip_to_next) {
             bunk(id, m, total, 1,"Setting bands...",pb,l)
             next
           }
-
+          
           if(!skip_to_next)
           {
             cat("\014")
@@ -432,220 +431,181 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
           }
         }
         close(pb)
-
-
-        ##################################################################################
-        ##################################################################################
-        ## Start downloading from GEE and Google Cloud Storage and load images to R memory
-        ##################################################################################
-        ##################################################################################
-
+      }
+      
+      ## Download dynamic covariates
+      {
         ## SMAP
-        cat("\014")
-        writeLines(c(msg, "Tasks done: 2/10","Downloading map..."))
-        pb <- txtProgressBar(min=0, max=3, style=3)
-        ee_as_raster(image = ssm, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "ssm_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-        bunk(id, m, total, 2,"Downloading map...",pb,1)
-        
-        ## Remove duplicates
-        if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "ssm_NASA_raw", full.names = T)) > 1 )
         {
-          temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "ssm_NASA_raw", full.names = T)
-          temp <- lapply(temp_name, stack)
-          if (length(names(temp[[1]])) >= length(names(temp[[2]])))
-          { ssm_raster <- temp[[2]]}
-          if (length(names(temp[[1]])) < length(names(temp[[2]])))
-          { ssm_raster <- temp[[1]]}
-          writeRaster(ssm_raster, paste0(WD, "/covariates_temp/ssm_NASA_raw.tif"), overwrite=T)
-          unlink(temp_name)
-          # Deleting unwanted files
-          xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
-          unlink(xml_names, recursive=TRUE)
-        }
-
-        ssm_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "ssm_NASA_raw", full.names = T))
-    
-        
-        ee_as_raster(image = susm, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "susm_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-        bunk(id, m, total, 2,"Downloading map...",pb,2)
-        
-        ## Remove duplicates
-        if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "susm_NASA_raw", full.names = T)) > 1 )
-        {
-          temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "susm_NASA_raw", full.names = T)
-          temp <- lapply(temp_name, stack)
-          if (length(names(temp[[1]])) >= length(names(temp[[2]])))
-          { susm_raster <- temp[[2]]}
-          if (length(names(temp[[1]])) < length(names(temp[[2]])))
-          { susm_raster <- temp[[1]]}
-          writeRaster(susm_raster, paste0(WD, "/covariates_temp/susm_NASA_raw.tif"), overwrite=T)
-          unlink(temp_name)
-          # Deleting unwanted files
-          xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
-          unlink(xml_names, recursive=TRUE)
-        }
-
-        susm_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "susm_NASA_raw", full.names = T))
-
-        SMAP_dates <- unlist(strsplit(ee_print(ssm, quiet=T)$img_bands_names, " "))
-        SMAP_dates <- substr(SMAP_dates, 18, 25)
-        SMAP_unique_dates <- sort(unique(SMAP_dates))
-        SMAP_index <- NULL
-        SMAP_list <- 1:length(SMAP_dates)
-        for (i in 1:length(SMAP_unique_dates))
-        {
-          temp <-   SMAP_list[SMAP_dates %in%  SMAP_unique_dates[i]][1]
-          SMAP_index <- c(SMAP_index, temp)
-        }
-
-        ## MODIS
-        ee_as_raster(image = LST, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LST_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-       
-        ## Remove duplicates
-        if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "LST_NASA_raw", full.names = T)) > 1 )
-        {
-          temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "LST_NASA_raw", full.names = T)
-          temp <- lapply(temp_name, stack)
-          if (length(names(temp[[1]])) >= length(names(temp[[2]])))
-          { LST_raster <- temp[[2]]}
-          if (length(names(temp[[1]])) < length(names(temp[[2]])))
-          { LST_raster <- temp[[1]]}
-          writeRaster(LST_raster, paste0(WD, "/covariates_temp/LST_NASA_raw.tif"), overwrite=T)
-          unlink(temp_name)
-          # Deleting unwanted files
-          xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
-          unlink(xml_names, recursive=TRUE)
-        }
-
-        LST_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LST_NASA_raw", full.names = T))
-        bunk(id, m, total, 2,"Downloading map...",pb,3)
-        close(pb)
-
-        ## Remove MODIS images that have a large cloud cover
-        {
-
-          ## Get the index of MODIS images that are not masked by cloud mask (0 values) and  with less than 33% cloud cover
-          mask_dates_MODIS <- NULL
           cat("\014")
-          writeLines(c(msg, "Tasks done: 3/10","Removing cloud cover..."))
-          pb <- txtProgressBar(min=0, max=dim(LST_raster)[3], style=3)
-          for (i in 1:dim(LST_raster)[3])
+          writeLines(c(msg, "Tasks done: 2/10","Downloading map..."))
+          pb <- txtProgressBar(min=0, max=3, style=3)
+          
+          
+          ee_as_raster(image = ssm, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "ssm_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+          bunk(id, m, total, 2,"Downloading map...",pb,1)
+          
+          ## Remove duplicates
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "ssm_NASA_raw", full.names = T)) > 1 )
           {
-            if(summary(values(LST_raster[[i]]))[3]!=0 & (sum(values(LST_raster[[i]])==0)/length(LST_raster[[1]]) < 4/5 ) )
-              mask_dates_MODIS <- c(mask_dates_MODIS, i)
-            bunk(id, m, total, 3,"Removing cloud cover...",pb,i)
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "ssm_NASA_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { ssm_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { ssm_raster <- temp[[1]]}
+            writeRaster(ssm_raster, paste0(WD, "/covariates_temp/ssm_NASA_raw.tif"), overwrite=T)
+            unlink(temp_name)
+            # Deleting unwanted files
+            xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+            unlink(xml_names, recursive=TRUE)
           }
-          close(pb)
-
-
+          
+          ee_as_raster(image = susm, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "susm_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+          bunk(id, m, total, 2,"Downloading map...",pb,2)
+          
+          ## Remove duplicates
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "susm_NASA_raw", full.names = T)) > 1 )
+          {
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "susm_NASA_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { susm_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { susm_raster <- temp[[1]]}
+            writeRaster(susm_raster, paste0(WD, "/covariates_temp/susm_NASA_raw.tif"), overwrite=T)
+            unlink(temp_name)
+            # Deleting unwanted files
+            xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+            unlink(xml_names, recursive=TRUE)
+          }  
         }
-
-        values(LST_raster)[values(LST_raster) == 0] = NA
-        LST_dates <- unlist(strsplit(ee_print(LST, quiet=T)$img_bands_names, " "))
-        LST_dates <- paste0(substr(LST_dates, 1, 4), substr(LST_dates, 6, 7), substr(LST_dates, 9, 10))
-        # LST_dates <- gsub("(.*)(\\d{4}_\\d{2}_\\d{2})(.*)", "\\2", LST_dates)
-        # LST_dates <- paste0(substr(names(LST_raster), 2, 5), substr(names(LST_raster), 7, 8), substr(names(LST_raster), 10, 11))
+ 
+        ## MODIS
+        {
+          ee_as_raster(image = LST, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LST_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+          bunk(id, m, total, 2,"Downloading map...",pb,3)
+          close(pb)
+          
+          ## Remove duplicates
+          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "LST_NASA_raw", full.names = T)) > 1 )
+          {
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "LST_NASA_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { LST_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { LST_raster <- temp[[1]]}
+            writeRaster(LST_raster, paste0(WD, "/covariates_temp/LST_NASA_raw.tif"), overwrite=T)
+            unlink(temp_name)
+            # Deleting unwanted files
+            xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+            unlink(xml_names, recursive=TRUE)
+          }
+          
+          
+        }
 
         ## Sentinel-1
-        vv_na <- FALSE
-        tryCatch(ee_print(vv), error = function(e) { vv_na <<- TRUE})
-        cat("\014")
-        writeLines(c(msg, "Tasks done: 4/10","Downloading map..."))
-        pb <- txtProgressBar(min=0, max=8, style=3)
-        if(!vv_na)
         {
-          ee_as_raster(image = vv, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "vv_S1_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-          bunk(id, m, total, 4,"Downloading map...",pb,1)
+          vv_na <- FALSE
+          tryCatch(ee_print(vv), error = function(e) { vv_na <<- TRUE})
+          cat("\014")
+          writeLines(c(msg, "Tasks done: 4/10","Downloading map..."))
+          pb <- txtProgressBar(min=0, max=8, style=3)
           
-          ## Remove duplicates
-          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "vv_S1_raw", full.names = T)) > 1 )
+          if(!vv_na)
           {
-            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "vv_S1_raw", full.names = T)
-            temp <- lapply(temp_name, stack)
-            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
-            { vv_raster <- temp[[2]]}
-            if (length(names(temp[[1]])) < length(names(temp[[2]])))
-            { vv_raster <- temp[[1]]}
-            writeRaster(vv_raster, paste0(WD, "/covariates_temp/vv_S1_raw.tif"), overwrite=T)
-            unlink(temp_name)
-            # Deleting unwanted files
-            xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
-            unlink(xml_names, recursive=TRUE)
+            ee_as_raster(image = vv, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "vv_S1_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+            bunk(id, m, total, 4,"Downloading map...",pb,1)
+            
+            ## Remove duplicates
+            if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "vv_S1_raw", full.names = T)) > 1 )
+            {
+              temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "vv_S1_raw", full.names = T)
+              temp <- lapply(temp_name, stack)
+              if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+              { vv_raster <- temp[[2]]}
+              if (length(names(temp[[1]])) < length(names(temp[[2]])))
+              { vv_raster <- temp[[1]]}
+              writeRaster(vv_raster, paste0(WD, "/covariates_temp/vv_S1_raw.tif"), overwrite=T)
+              unlink(temp_name)
+              # Deleting unwanted files
+              xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+              unlink(xml_names, recursive=TRUE)
+            }
+            
+            
+            ee_as_raster(image = vh, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "vh_S1_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+            bunk(id, m, total, 4,"Downloading map...",pb,2)
+            
+            ## Remove duplicates
+            if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "vh_S1_raw", full.names = T)) > 1 )
+            {
+              temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "vh_S1_raw", full.names = T)
+              temp <- lapply(temp_name, stack)
+              if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+              { vh_raster <- temp[[2]]}
+              if (length(names(temp[[1]])) < length(names(temp[[2]])))
+              { vh_raster <- temp[[1]]}
+              writeRaster(vh_raster, paste0(WD, "/covariates_temp/vh_S1_raw.tif"), overwrite=T)
+              unlink(temp_name)
+              # Deleting unwanted files
+              xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+              unlink(xml_names, recursive=TRUE)
+            }
+            
+            
+            ee_as_raster(image = angle, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "angle_S1_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+            bunk(id, m, total, 4,"Downloading map...",pb,3)
+            
+            ## Remove duplicates
+            if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "angle_S1_raw", full.names = T)) > 1 )
+            {
+              temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "angle_S1_raw", full.names = T)
+              temp <- lapply(temp_name, stack)
+              if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+              { angle_raster <- temp[[2]]}
+              if (length(names(temp[[1]])) < length(names(temp[[2]])))
+              { angle_raster <- temp[[1]]}
+              writeRaster(angle_raster, paste0(WD, "/covariates_temp/angle_S1_raw.tif"), overwrite=T)
+              unlink(temp_name)
+              # Deleting unwanted files
+              xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
+              unlink(xml_names, recursive=TRUE)
+            }
+            
           }
-
-          vv_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "vv_S1_raw", full.names = T))
           
-          ee_as_raster(image = vh, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "vh_S1_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-          bunk(id, m, total, 4,"Downloading map...",pb,2)
-          
-          ## Remove duplicates
-          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "vh_S1_raw", full.names = T)) > 1 )
-          {
-            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "vh_S1_raw", full.names = T)
-            temp <- lapply(temp_name, stack)
-            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
-            { vh_raster <- temp[[2]]}
-            if (length(names(temp[[1]])) < length(names(temp[[2]])))
-            { vh_raster <- temp[[1]]}
-            writeRaster(vh_raster, paste0(WD, "/covariates_temp/vh_S1_raw.tif"), overwrite=T)
-            unlink(temp_name)
-            # Deleting unwanted files
-            xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
-            unlink(xml_names, recursive=TRUE)
-          }
-          
-          vh_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "vh_S1_raw", full.names = T))
-          
-          ee_as_raster(image = angle, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "angle_S1_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-          bunk(id, m, total, 4,"Downloading map...",pb,3)
-          
-          ## Remove duplicates
-          if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "angle_S1_raw", full.names = T)) > 1 )
-          {
-            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "angle_S1_raw", full.names = T)
-            temp <- lapply(temp_name, stack)
-            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
-            { angle_raster <- temp[[2]]}
-            if (length(names(temp[[1]])) < length(names(temp[[2]])))
-            { angle_raster <- temp[[1]]}
-            writeRaster(angle_raster, paste0(WD, "/covariates_temp/angle_S1_raw.tif"), overwrite=T)
-            unlink(temp_name)
-            # Deleting unwanted files
-            xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
-            unlink(xml_names, recursive=TRUE)
-          }
-          
-          angle_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "angle_S1_raw", full.names = T))
-
-          S1_dates <- unlist(strsplit(ee_print(vv, quiet=T)$img_bands_names, " "))
-          S1_dates <- paste0(substr(S1_dates, 1, 4), substr(S1_dates, 6, 7), substr(S1_dates, 9, 10))
         }
-
+  
         ## Landsat-8
-        ee_as_raster(image = LS_B4, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LS_B4_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-        bunk(id, m, total, 4,"Downloading map...",pb,4)
-        ee_as_raster(image = LS_B5, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LS_B5_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-        bunk(id, m, total, 4,"Downloading map...",pb,5)
-        ee_as_raster(image = LS_B6, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LS_B6_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-        bunk(id, m, total, 4,"Downloading map...",pb,6)
-        ee_as_raster(image = LS_B7, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LS_B7_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-        bunk(id, m, total, 4,"Downloading map...",pb,7)
-        ee_as_raster(image = LS_B10, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LS_B10_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
-        bunk(id, m, total, 4,"Downloading map...",pb,8)
-        close(pb)
-
-        ## Remove Landsat-8 images that have repeated dates and a large cloud cover
         {
+
+          
+          ee_as_raster(image = LS_B4, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LS_B4_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+          bunk(id, m, total, 4,"Downloading map...",pb,4)
+          ee_as_raster(image = LS_B5, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LS_B5_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+          bunk(id, m, total, 4,"Downloading map...",pb,5)
+          ee_as_raster(image = LS_B6, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LS_B6_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+          bunk(id, m, total, 4,"Downloading map...",pb,6)
+          ee_as_raster(image = LS_B7, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LS_B7_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+          bunk(id, m, total, 4,"Downloading map...",pb,7)
+          ee_as_raster(image = LS_B10, region = roi, dsn = file.path(paste0(WD, "/covariates_temp"), "LS_B10_NASA_raw"), scale = resolution, quiet =T, maxPixels = 1e+13)
+          bunk(id, m, total, 4,"Downloading map...",pb,8)
+          close(pb)
+          
+          ## Remove Landsat-8 images that have repeated dates and a large cloud cover
           if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B4_NASA_raw", full.names = T)) > 1 )
           {
-          temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B4_NASA_raw", full.names = T)
-          temp <- lapply(temp_name, stack)
-          if (length(names(temp[[1]])) >= length(names(temp[[2]])))
-          { LS_B4_raster <- temp[[2]]}
-          if (length(names(temp[[1]])) < length(names(temp[[2]])))
-          { LS_B4_raster <- temp[[1]]}
-          writeRaster(LS_B4_raster, paste0(WD, "/covariates_temp/LS_B4_raster.tif"), overwrite=T)
-          unlink(temp_name)
+            temp_name <- list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B4_NASA_raw", full.names = T)
+            temp <- lapply(temp_name, stack)
+            if (length(names(temp[[1]])) >= length(names(temp[[2]])))
+            { LS_B4_raster <- temp[[2]]}
+            if (length(names(temp[[1]])) < length(names(temp[[2]])))
+            { LS_B4_raster <- temp[[1]]}
+            writeRaster(LS_B4_raster, paste0(WD, "/covariates_temp/LS_B4_raster.tif"), overwrite=T)
+            unlink(temp_name)
           }
           
           if (length(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B5_NASA_raw", full.names = T)) > 1 )
@@ -700,43 +660,94 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
           xml_names <- list.files(paste0(WD, "/covariates_temp"), pattern = "xml", full.names = T)
           unlink(xml_names, recursive=TRUE)
           
-          ## Load the images
-          LS_B4_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B4_NASA_raw", full.names = T))
-          LS_B5_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B5_NASA_raw", full.names = T))
-          LS_B6_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B6_NASA_raw", full.names = T))
-          LS_B7_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B7_NASA_raw", full.names = T))
-          LS_B10_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B10_NASA_raw", full.names = T))
+          
+        }
+  
+        ## ## ## ## ## ## ## ## ## ## ## ## ## ##
+        ## Now input all the covariates for preprocessing
+        
+        ## SMAP
+        ssm_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "ssm_NASA_raw", full.names = T))
+        susm_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "susm_NASA_raw", full.names = T))
+        
+        SMAP_dates <- unlist(strsplit(ee_print(ssm, quiet=T)$img_bands_names, " "))
+        SMAP_dates <- substr(SMAP_dates, 18, 25)
+        SMAP_unique_dates <- sort(unique(SMAP_dates))
+        SMAP_index <- NULL
+        SMAP_list <- 1:length(SMAP_dates)
+        for (i in 1:length(SMAP_unique_dates))
+        {
+          temp <-   SMAP_list[SMAP_dates %in%  SMAP_unique_dates[i]][1]
+          SMAP_index <- c(SMAP_index, temp)
+        }
+        
+   
+        ## MODIS
+        LST_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LST_NASA_raw", full.names = T))
+        ## Remove MODIS images that have a large cloud cover
+        {
 
-          LS_dates <- unlist(strsplit(ee_print(LS_B4, quiet=T)$img_bands_names, " "))
-          LS_dates <- paste0(substr(LS_dates, 1, 4), substr(LS_dates, 6, 7), substr(LS_dates, 9, 10))
-
-
-          names(LS_B4_raster) <- names(LS_B5_raster) <- names(LS_B6_raster) <- names(LS_B7_raster) <- names(LS_B10_raster) <- LS_dates
-
-
-          ## Get the index of landsat-8 images with less than 80% cloud cover
-          mask_dates_LS <- NULL
+          ## Get the index of MODIS images that are not masked by cloud mask (0 values) and  with less than 33% cloud cover
+          mask_dates_MODIS <- NULL
           cat("\014")
-          writeLines(c(msg, "Tasks done: 5/10","Removibg cloud cover..."))
-          pb <- txtProgressBar(min=0, max=dim(LS_B4_raster)[3], style=3)
-          for (i in 1:dim(LS_B4_raster)[3])
+          writeLines(c(msg, "Tasks done: 3/10","Removing cloud cover..."))
+          pb <- txtProgressBar(min=0, max=dim(LST_raster)[3], style=3)
+          for (i in 1:dim(LST_raster)[3])
           {
-            if(sum(is.na(values(LS_B4_raster[[i]])))/length(LS_B4_raster[[1]]) < 0.8  & summary(values(LS_B4_raster[[i]]))[3] < 0.6 )
-              mask_dates_LS <- c(mask_dates_LS, i)
-            bunk(id, m, total, 5,"Removing cloud cover...",pb,i)
+            if(summary(values(LST_raster[[i]]))[3]!=0 & (sum(values(LST_raster[[i]])==0)/length(LST_raster[[1]]) < 4/5 ) )
+              mask_dates_MODIS <- c(mask_dates_MODIS, i)
+            bunk(id, m, total, 3,"Removing cloud cover...",pb,i)
           }
           close(pb)
 
 
         }
+        values(LST_raster)[values(LST_raster) == 0] = NA
+        LST_dates <- unlist(strsplit(ee_print(LST, quiet=T)$img_bands_names, " "))
+        LST_dates <- paste0(substr(LST_dates, 1, 4), substr(LST_dates, 6, 7), substr(LST_dates, 9, 10))
+        # LST_dates <- gsub("(.*)(\\d{4}_\\d{2}_\\d{2})(.*)", "\\2", LST_dates)
+        # LST_dates <- paste0(substr(names(LST_raster), 2, 5), substr(names(LST_raster), 7, 8), substr(names(LST_raster), 10, 11))
 
+        
+        ## S1
+        vv_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "vv_S1_raw", full.names = T))
+        vh_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "vh_S1_raw", full.names = T))
+        angle_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "angle_S1_raw", full.names = T))
+        S1_dates <- unlist(strsplit(ee_print(vv, quiet=T)$img_bands_names, " "))
+        S1_dates <- paste0(substr(S1_dates, 1, 4), substr(S1_dates, 6, 7), substr(S1_dates, 9, 10))
+        
+
+        ## Landsat-8
+        LS_B4_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B4_NASA_raw", full.names = T))
+        LS_B5_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B5_NASA_raw", full.names = T))
+        LS_B6_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B6_NASA_raw", full.names = T))
+        LS_B7_raster  <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B7_NASA_raw", full.names = T))
+        LS_B10_raster <- stack(list.files(paste0(WD, "/covariates_temp"), pattern = "LS_B10_NASA_raw", full.names = T))
+        LS_dates <- unlist(strsplit(ee_print(LS_B4, quiet=T)$img_bands_names, " "))
+        LS_dates <- paste0(substr(LS_dates, 1, 4), substr(LS_dates, 6, 7), substr(LS_dates, 9, 10))
+        names(LS_B4_raster) <- names(LS_B5_raster) <- names(LS_B6_raster) <- names(LS_B7_raster) <- names(LS_B10_raster) <- LS_dates
+        ## Get the index of landsat-8 images with less than 80% cloud cover
+        mask_dates_LS <- NULL
+        cat("\014")
+        writeLines(c(msg, "Tasks done: 5/10","Removibg cloud cover..."))
+        pb <- txtProgressBar(min=0, max=dim(LS_B4_raster)[3], style=3)
+        for (i in 1:dim(LS_B4_raster)[3])
+        {
+          if(sum(is.na(values(LS_B4_raster[[i]])))/length(LS_B4_raster[[1]]) < 0.8  & summary(values(LS_B4_raster[[i]]))[3] < 0.6 )
+            mask_dates_LS <- c(mask_dates_LS, i)
+          bunk(id, m, total, 5,"Removing cloud cover...",pb,i)
+        }
+        close(pb)
         values(LS_B4_raster)[values(LS_B4_raster) <= 0] = NA
         values(LS_B5_raster)[values(LS_B5_raster) <= 0] = NA
         values(LS_B6_raster)[values(LS_B6_raster) <= 0] = NA
         values(LS_B7_raster)[values(LS_B7_raster) <= 0] = NA
         values(LS_B10_raster)[values(LS_B10_raster) <= 0] = NA
+
+
       }
 
+     
       ## Temporal gap-filling dynamic covariates using pixel-wise linear interpolation and load the gap-filled images into R
       {
         cat("\014")
