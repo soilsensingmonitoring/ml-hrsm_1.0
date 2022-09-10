@@ -750,7 +750,7 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
                             outdir = paste0(WD, "/covariates_temp"), prefix = "susm_doy", progress=F, writechange=F, returnstack=F, overwrite=TRUE)
         bunk(id, m, total, 6,"Temporal gap-filling...",pb,2)
         ## MODIS
-        interpolateTemporal(s = LST_raster[[mask_dates_MODIS]], xin = as.numeric(as.Date(LST_dates[mask_dates_MODIS], "%Y_%m_%d")), xout = as.numeric(seq.Date(doy_frame[1],doy_frame[2], 1)),
+        interpolateTemporal(s = LST_raster[[mask_dates_MODIS]], xin = as.numeric(as.Date(LST_dates[mask_dates_MODIS], "%Y%m%d")), xout = as.numeric(seq.Date(doy_frame[1],doy_frame[2], 1)),
                             outdir = paste0(WD, "/covariates_temp"), prefix = "LST_doy", progress=F, writechange=F, returnstack=F, overwrite=TRUE)
         bunk(id, m, total, 6,"Temporal gap-filling...",pb,3)
 
