@@ -23,6 +23,7 @@ First, all users need to create a free Google Earth Engine account (https://eart
 Second, install gcloud CLI before downloading map from Google Earth Engine (https://dl.google.com/dl/cloudsdk/channels/rapid/GoogleCloudSDKInstaller.exe). 
 Third, create a project on the Google Earth Account for future use. After installing the gcloud CLI, if a CMD window pops out (when the user enables configuration of gcloud) to ask the user to connect gcloud CLI, select “Y” to log in. Then a web page will appear with a message saying “Google Cloud SDK wants to access your Google Account”; select Allow and go back to the CMD where the system asks the user to “Pick cloud project to use.” Select the project the user wants to use, and close CMD.
 Lastly, relaunch R software and install Google Earth Engine API in the R environment.
+> library(mlhrsm)
 > ee_Initialize("Your email address", drive=T) # insert your email address
 
 If it’s the first time the user uses ee_Initialize() on the computer, R will print downloading and installation messages when preparing for the initialization. Select “Y” when R asks to install Miniconda. If the computer does not have the Python package "earthengine-api" installed, an error message will appear and the user should run the following command line to install it.
