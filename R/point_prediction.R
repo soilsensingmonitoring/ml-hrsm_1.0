@@ -1126,12 +1126,11 @@ VWC_point <- function(file, start_date, end_date, percentile=FALSE,
             map_covariate_grid$LST  <- mean(all$LST, na.rm = T)
           }
 
-          if(sum(!is.na(map_covariate_grid$LS_B5))<1)
+          if(sum(!is.na(map_covariate_grid$LS_B5)) <1 | sum(!is.na(map_covariate_grid$LS_B6))<1 | sum(!is.na(map_covariate_grid$LS_B7)) <1 | sum(!is.na(map_covariate_grid$LS_NDVI)) <1 | sum(!is.na(map_covariate_grid$LS_NDWI)) <1)
           {
             map_covariate_grid$LS_B5  <- mean(all$LS_B5, na.rm = T)
             map_covariate_grid$LS_B6  <- mean(all$LS_B6, na.rm = T)
             map_covariate_grid$LS_B7  <- mean(all$LS_B7, na.rm = T)
-            map_covariate_grid$LS_B10  <- mean(all$LS_B10, na.rm = T)
             map_covariate_grid$LS_NDVI  <- mean(all$LS_NDVI, na.rm = T)
             map_covariate_grid$LS_NDWI  <- mean(all$LS_NDWI, na.rm = T)
           }
