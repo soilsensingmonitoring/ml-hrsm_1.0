@@ -35,3 +35,6 @@ If it’s the first time the user uses ee_Initialize() on the computer, R will p
 Then R will ask the user to store environment variables EARTHENGINE_PYTHON and EARTHENGINE_ENV in the .Renviron file to use Python path in future sessions. Type “Y” to continue, and restart R session when prompted to do so after installation is completed. Run ee_Initialize("Your email address", drive=T) again. A new window will pop up in the browser saying “Google Earth Engine Authenticator wants to access your Google Account”, then select Allow to allow the local R environment to connect to the user’s Google Earth Engine. If successful, the user will see the following messages in the R console. The user can now access the maps in Earth Engine from the local R environment and download them to the user’s Google Drive.
 Fetching credentials using gcloud
 Successfully saved authorization token
+
+###################### Demo ####################
+To see some examples, please download the files in the "Demo" folder and run "Demo.R" file.
